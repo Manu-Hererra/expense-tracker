@@ -22,7 +22,7 @@ async function sb(table, method = "GET", body = null, params = "") {
 
 // ─── defaults ─────────────────────────────────────────────────────────────────
 const DEFAULT_CATEGORIES = [
-  { id:"alquiler",      name:"Alquiler",      icon:"🏠", color:"#6366f1" },
+  { id:"alquiler",      name:"Hogar",         icon:"🏡", color:"#6366f1" },
   { id:"expensas",      name:"Expensas",       icon:"🏢", color:"#8b5cf6" },
   { id:"supermercado",  name:"Supermercado",   icon:"🛒", color:"#10b981" },
   { id:"transporte",    name:"Transporte",     icon:"🚌", color:"#3b82f6" },
@@ -37,6 +37,7 @@ const DEFAULT_CATEGORIES = [
 const DEFAULT_CARDS = [
   { id:"efectivo", name:"Efectivo", color:"#10b981", closing_day: null },
   { id:"debito",   name:"Débito",   color:"#3b82f6", closing_day: null },
+  { id:"credito",  name:"Crédito",  color:"#f59e0b", closing_day: null },
 ];
 
 function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2); }
@@ -267,6 +268,7 @@ export default function App() {
     <>
       <style>{`
         *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+        *{-webkit-tap-highlight-color:transparent}
         :root{
           --bg:#0f0f13;--surface:#1a1a24;--surface2:#22222f;--border:#2e2e3e;
           --accent:#6366f1;--accent2:#818cf8;
@@ -353,6 +355,14 @@ export default function App() {
         .empty{text-align:center;padding:40px 20px;color:var(--muted)}
         .empty-icon{font-size:40px;margin-bottom:12px}
         .warning-box{background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-radius:var(--radius-sm);padding:14px 16px;font-size:13px;line-height:1.6}
+        .expense-item:active,.fixed-item:active{background:var(--surface2);border-radius:var(--radius-sm);margin:0 -8px;padding:12px 8px}
+        .icon-btn:active{background:var(--border)}
+        .fab:active{transform:scale(.92)}
+        .filter-btn:active{opacity:.65}
+        .nav-item:active{opacity:.6}
+        .cat-picker-btn:active{opacity:.75}
+        .card-chip:active{opacity:.75}
+        .period-btn:active{background:var(--border)}
       `}</style>
 
       <div className="app">
@@ -538,7 +548,7 @@ export default function App() {
           {tab==="analisis"&&<AnalisisTab cards={cards}/>}
         </div>
 
-        {tab==="gastos"&&<button className="fab" onClick={()=>{setEditing(null);setModal("expense")}}>+</button>}
+        {(tab==="gastos"||tab==="dashboard")&&<button className="fab" onClick={()=>{setEditing(null);setModal("expense")}}>+</button>}
 
         <nav className="nav">
           {[{id:"dashboard",icon:"📊",label:"Resumen"},{id:"gastos",icon:"🧾",label:"Gastos"},{id:"fijos",icon:"🔁",label:"Fijos"},{id:"tarjetas",icon:"💳",label:"Tarjetas"},{id:"analisis",icon:"🤖",label:"IA"}].map(n=>(
@@ -558,35 +568,73 @@ export default function App() {
 }
 
 function ExpenseModal({expense,categories,cards,onSave,onDelete,onClose}) {
-  const [form,setForm]=useState({description:expense?.description||"",amount:expense?.amount||"",category:expense?.category||categories[0]?.id||"",card:expense?.card||cards[0]?.id||"",date:expense?.date||today()});
+  const [form,setForm]=useState({description:expense?.description||"",amount:expense?.amount?String(expense.amount):"",category:expense?.category||categories[0]?.id||"",card:expense?.card||cards[0]?.id||"",date:expense?.date||today()});
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const handleAmount=v=>{const d=v.replace(/[^\d]/g,"");set("amount",d);};
+  const displayAmount=form.amount?new Intl.NumberFormat("es-AR").format(Number(form.amount)):"";
   return(
     <div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}>
       <div className="sheet-title">{expense?"Editar gasto":"Nuevo gasto"}<button onClick={onClose} style={{fontSize:20,color:"var(--muted)"}}>✕</button></div>
-      <div className="field"><label>Monto ($)</label><input type="number" placeholder="0" value={form.amount} onChange={e=>set("amount",e.target.value)} autoFocus/></div>
+      <div className="field"><label>Monto ($)</label><input type="text" inputMode="decimal" placeholder="0" value={displayAmount} onChange={e=>handleAmount(e.target.value)} autoFocus style={{fontSize:22,fontWeight:700,letterSpacing:"-.5px"}}/></div>
       <div className="field"><label>Descripción</label><input type="text" placeholder="Ej: Almuerzo" value={form.description} onChange={e=>set("description",e.target.value)}/></div>
-      <div className="field"><label>Categoría</label><select value={form.category} onChange={e=>set("category",e.target.value)}>{categories.map(c=><option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}</select></div>
-      <div className="field"><label>Medio de pago</label><select value={form.card} onChange={e=>set("card",e.target.value)}>{cards.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+      <div className="field"><label>Categoría</label><CategoryPicker categories={categories} value={form.category} onChange={v=>set("category",v)}/></div>
+      <div className="field"><label>Medio de pago</label><CardChips cards={cards} value={form.card} onChange={v=>set("card",v)}/></div>
       <div className="field"><label>Fecha</label><input type="date" value={form.date} onChange={e=>set("date",e.target.value)}/></div>
-      <button className="btn btn-primary" onClick={()=>{if(form.amount)onSave(form)}}>{expense?"Guardar cambios":"Agregar gasto"}</button>
+      <button className="btn btn-primary" onClick={()=>{if(form.amount)onSave({...form,amount:Number(form.amount)})}}>{expense?"Guardar cambios":"Agregar gasto"}</button>
       {onDelete&&<button className="btn btn-danger" onClick={onDelete}>Eliminar gasto</button>}
     </div></div>
   );
 }
 
 function FixedModal({expense,categories,cards,onSave,onDelete,onClose}) {
-  const [form,setForm]=useState({description:expense?.description||"",amount:expense?.amount||"",category:expense?.category||categories[0]?.id||"",card:expense?.card||cards[0]?.id||""});
+  const [form,setForm]=useState({description:expense?.description||"",amount:expense?.amount?String(expense.amount):"",category:expense?.category||categories[0]?.id||"",card:expense?.card||cards[0]?.id||""});
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const handleAmount=v=>{const d=v.replace(/[^\d]/g,"");set("amount",d);};
+  const displayAmount=form.amount?new Intl.NumberFormat("es-AR").format(Number(form.amount)):"";
   return(
     <div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}>
       <div className="sheet-title">{expense?"Editar gasto fijo":"Nuevo gasto fijo"}<button onClick={onClose} style={{fontSize:20,color:"var(--muted)"}}>✕</button></div>
-      <div className="field"><label>Monto ($)</label><input type="number" placeholder="0" value={form.amount} onChange={e=>set("amount",e.target.value)} autoFocus/></div>
-      <div className="field"><label>Descripción</label><input type="text" placeholder="Ej: Alquiler" value={form.description} onChange={e=>set("description",e.target.value)}/></div>
-      <div className="field"><label>Categoría</label><select value={form.category} onChange={e=>set("category",e.target.value)}>{categories.map(c=><option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}</select></div>
-      <div className="field"><label>Medio de pago</label><select value={form.card} onChange={e=>set("card",e.target.value)}>{cards.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-      <button className="btn btn-primary" onClick={()=>{if(form.amount)onSave({...form,isFixed:true})}}>{expense?"Guardar cambios":"Agregar gasto fijo"}</button>
+      <div className="field"><label>Monto ($)</label><input type="text" inputMode="decimal" placeholder="0" value={displayAmount} onChange={e=>handleAmount(e.target.value)} autoFocus style={{fontSize:22,fontWeight:700,letterSpacing:"-.5px"}}/></div>
+      <div className="field"><label>Descripción</label><input type="text" placeholder="Ej: Expensas" value={form.description} onChange={e=>set("description",e.target.value)}/></div>
+      <div className="field"><label>Categoría</label><CategoryPicker categories={categories} value={form.category} onChange={v=>set("category",v)}/></div>
+      <div className="field"><label>Medio de pago</label><CardChips cards={cards} value={form.card} onChange={v=>set("card",v)}/></div>
+      <button className="btn btn-primary" onClick={()=>{if(form.amount)onSave({...form,amount:Number(form.amount),isFixed:true})}}>{expense?"Guardar cambios":"Agregar gasto fijo"}</button>
       {onDelete&&<button className="btn btn-danger" onClick={onDelete}>Eliminar</button>}
     </div></div>
+  );
+}
+
+function CategoryPicker({categories,value,onChange}) {
+  return(
+    <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6}}>
+      {categories.map(c=>(
+        <button key={c.id} className="cat-picker-btn" onClick={()=>onChange(c.id)}
+          style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,padding:"10px 4px",borderRadius:10,
+            background:value===c.id?c.color+"22":"var(--surface2)",
+            border:`2px solid ${value===c.id?c.color:"transparent"}`,
+            transition:"all .15s",cursor:"pointer"}}>
+          <span style={{fontSize:22}}>{c.icon}</span>
+          <span style={{fontSize:10,fontWeight:value===c.id?600:400,color:value===c.id?c.color:"var(--muted)",textAlign:"center",lineHeight:1.2}}>{c.name}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function CardChips({cards,value,onChange}) {
+  return(
+    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+      {cards.map(c=>(
+        <button key={c.id} className="card-chip" onClick={()=>onChange(c.id)}
+          style={{padding:"8px 16px",borderRadius:99,
+            background:value===c.id?c.color:"var(--surface2)",
+            border:`2px solid ${value===c.id?c.color:"var(--border)"}`,
+            color:value===c.id?"#fff":"var(--text)",
+            fontSize:13,fontWeight:500,transition:"all .15s",cursor:"pointer"}}>
+          {c.name}
+        </button>
+      ))}
+    </div>
   );
 }
 
