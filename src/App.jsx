@@ -90,20 +90,20 @@ const CSS = `
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
   *{-webkit-tap-highlight-color:transparent}
   :root{
-    --bg:#09090f;
-    --card:#121220;
-    --card2:#1a1a2e;
-    --border:rgba(124,58,237,.18);
-    --accent:#7c3aed;
-    --accent2:#a78bfa;
-    --grad:linear-gradient(135deg,#7c3aed,#c026d3);
-    --grad-soft:linear-gradient(135deg,rgba(124,58,237,.15),rgba(192,38,211,.15));
-    --text:#f0f0ff;
-    --muted:#6b6b8e;
+    --bg:#080c14;
+    --card:#0f1524;
+    --card2:#162032;
+    --border:rgba(59,130,246,.16);
+    --accent:#3b82f6;
+    --accent2:#93c5fd;
+    --grad:linear-gradient(135deg,#3b82f6,#6366f1);
+    --grad-soft:linear-gradient(135deg,rgba(59,130,246,.12),rgba(99,102,241,.12));
+    --text:#eef2ff;
+    --muted:#6b7aa0;
     --danger:#f43f5e;
     --success:#34d399;
     --warn:#fbbf24;
-    --r:18px;--r-sm:12px;--r-xs:8px;
+    --r:20px;--r-sm:14px;--r-xs:9px;
   }
   html,body{height:100dvh;overflow:hidden;overscroll-behavior:none}
   body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',sans-serif;font-size:15px;line-height:1.5}
@@ -130,7 +130,7 @@ const CSS = `
   .nav-wrap{flex-shrink:0;padding:8px 16px calc(env(safe-area-inset-bottom,0px) + 8px)}
   .nav{background:var(--card);border:1px solid var(--border);border-radius:22px;display:flex;overflow:hidden}
   .nav-item{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:10px 4px;font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.2px;transition:color .15s;border-radius:18px;margin:4px 3px}
-  .nav-item.active{color:var(--accent2);background:rgba(124,58,237,.14)}
+  .nav-item.active{color:var(--accent2);background:rgba(59,130,246,.14)}
   .nav-icon{font-size:19px;line-height:1}
   .nav-item:active{opacity:.6}
 
@@ -152,14 +152,14 @@ const CSS = `
   .cierre-chip:active{opacity:.6}
 
   /* Hero */
-  .hero{background:var(--grad-soft);border:1px solid rgba(124,58,237,.25);border-radius:var(--r);padding:24px 20px 20px;margin-bottom:12px;position:relative;overflow:hidden}
-  .hero::before{content:'';position:absolute;top:-40px;right:-40px;width:160px;height:160px;background:radial-gradient(circle,rgba(192,38,211,.2),transparent 70%);pointer-events:none}
+  .hero{background:var(--grad-soft);border:1px solid rgba(59,130,246,.25);border-radius:var(--r);padding:24px 20px 20px;margin-bottom:12px;position:relative;overflow:hidden}
+  .hero::before{content:'';position:absolute;top:-40px;right:-40px;width:160px;height:160px;background:radial-gradient(circle,rgba(99,102,241,.2),transparent 70%);pointer-events:none}
   .hero-label{font-size:12px;font-weight:600;color:var(--accent2);text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px}
   .hero-amount{font-size:42px;font-weight:800;letter-spacing:-2px;background:var(--grad);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;line-height:1}
-  .hero-divider{height:1px;background:rgba(124,58,237,.2);margin:14px 0}
+  .hero-divider{height:1px;background:rgba(59,130,246,.2);margin:14px 0}
   .hero-stats{display:flex;gap:0}
   .hero-stat{flex:1;text-align:center}
-  .hero-stat+.hero-stat{border-left:1px solid rgba(124,58,237,.2)}
+  .hero-stat+.hero-stat{border-left:1px solid rgba(59,130,246,.2)}
   .hero-stat-label{font-size:11px;color:var(--muted);font-weight:500;margin-bottom:3px}
   .hero-stat-val{font-size:16px;font-weight:700;letter-spacing:-.4px}
 
@@ -177,7 +177,7 @@ const CSS = `
 
   /* Category list */
   .cat-list{background:var(--card);border:1px solid var(--border);border-radius:var(--r-sm);overflow:hidden;margin-bottom:8px}
-  .cat-row{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid rgba(124,58,237,.08)}
+  .cat-row{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid rgba(59,130,246,.08)}
   .cat-row:last-child{border-bottom:none}
   .cat-icon-wrap{width:38px;height:38px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:19px;flex-shrink:0}
   .cat-info{flex:1;min-width:0}
@@ -191,7 +191,7 @@ const CSS = `
   .filters{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;margin-bottom:10px}
   .filters::-webkit-scrollbar{display:none}
   .filter-btn{white-space:nowrap;padding:7px 14px;border-radius:99px;font-size:12px;font-weight:600;background:var(--card);border:1px solid var(--border);color:var(--muted);flex-shrink:0;transition:all .15s}
-  .filter-btn.active{background:rgba(124,58,237,.2);border-color:var(--accent);color:var(--accent2)}
+  .filter-btn.active{background:rgba(59,130,246,.2);border-color:var(--accent);color:var(--accent2)}
   .filter-btn:active{opacity:.6}
 
   /* Date header */
@@ -199,7 +199,7 @@ const CSS = `
 
   /* Expense items */
   .exp-list{background:var(--card);border:1px solid var(--border);border-radius:var(--r-sm);overflow:hidden;margin-bottom:4px}
-  .expense-item{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid rgba(124,58,237,.08);cursor:pointer}
+  .expense-item{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid rgba(59,130,246,.08);cursor:pointer}
   .expense-item:last-child{border-bottom:none}
   .expense-item:active{background:var(--card2)}
   .exp-icon{width:42px;height:42px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
@@ -208,11 +208,11 @@ const CSS = `
   .exp-meta{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:5px}
   .exp-card-dot{width:6px;height:6px;border-radius:50%;display:inline-block;flex-shrink:0}
   .exp-amount{font-weight:700;font-size:15px;letter-spacing:-.3px;flex-shrink:0}
-  .chip-fixed{font-size:9px;padding:2px 6px;border-radius:99px;font-weight:700;background:rgba(124,58,237,.2);color:var(--accent2);letter-spacing:.3px}
+  .chip-fixed{font-size:9px;padding:2px 6px;border-radius:99px;font-weight:700;background:rgba(59,130,246,.2);color:var(--accent2);letter-spacing:.3px}
 
   /* Fixed items */
   .fixed-list{background:var(--card);border:1px solid var(--border);border-radius:var(--r-sm);overflow:hidden;margin-bottom:12px}
-  .fixed-item{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid rgba(124,58,237,.08);cursor:pointer}
+  .fixed-item{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid rgba(59,130,246,.08);cursor:pointer}
   .fixed-item:last-child{border-bottom:none}
   .fixed-item:active{background:var(--card2)}
 
@@ -231,7 +231,7 @@ const CSS = `
   .warn-box{background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.2);border-radius:var(--r-sm);padding:12px 16px;font-size:13px;color:var(--warn);line-height:1.6;margin-bottom:12px}
 
   /* FAB */
-  .fab{position:fixed;bottom:calc(90px + env(safe-area-inset-bottom,0px));right:calc(50% - 224px);width:56px;height:56px;border-radius:50%;background:var(--grad);display:flex;align-items:center;justify-content:center;font-size:28px;color:#fff;box-shadow:0 4px 28px rgba(124,58,237,.5);z-index:9;line-height:1}
+  .fab{position:fixed;bottom:calc(90px + env(safe-area-inset-bottom,0px));right:calc(50% - 224px);width:56px;height:56px;border-radius:50%;background:var(--grad);display:flex;align-items:center;justify-content:center;font-size:28px;color:#fff;box-shadow:0 4px 28px rgba(59,130,246,.5);z-index:9;line-height:1}
   .fab:active{transform:scale(.9)}
   @media(max-width:480px){.fab{right:20px}}
 
@@ -436,8 +436,8 @@ export default function App() {
   const noClosingDaySet = viewMode === "cierre" && !closingDay;
 
   if (loading) return (
-    <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100dvh",background:"#09090f",color:"#f0f0ff",gap:14}}>
-      <div style={{width:52,height:52,borderRadius:16,background:"linear-gradient(135deg,#7c3aed,#c026d3)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:26}}>💸</div>
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100dvh",background:"#080c14",color:"#eef2ff",gap:14}}>
+      <div style={{width:52,height:52,borderRadius:16,background:"linear-gradient(135deg,#3b82f6,#6366f1)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:26}}>💸</div>
       <div style={{fontWeight:700,fontSize:20,letterSpacing:"-.4px"}}>Mis Gastos</div>
       <div style={{fontSize:13,color:"#6b6b8e"}}>Cargando...</div>
     </div>
@@ -793,7 +793,7 @@ function CardChips({cards,value,onChange}) {
 }
 
 function CardModal({card,onSave,onDelete,onClose}) {
-  const COLORS=["#7c3aed","#10b981","#3b82f6","#f59e0b","#ef4444","#ec4899","#c026d3","#14b8a6","#f97316","#6366f1"];
+  const COLORS=["#3b82f6","#10b981","#3b82f6","#f59e0b","#ef4444","#ec4899","#6366f1","#14b8a6","#f97316","#6366f1"];
   const [form,setForm]=useState({name:card?.name||"",color:card?.color||COLORS[0],closingDay:card?.closingDay||card?.closing_day||""});
   return(
     <div className="overlay" onClick={onClose}>
