@@ -1,21 +1,23 @@
 import { useState, useEffect, useCallback } from "react";
 
-// ─── storage hook ─────────────────────────────────────────────────────────────
-function useStorage(key, initial) {
-  const [value, setValue] = useState(() => {
-    try {
-      const s = localStorage.getItem(key);
-      return s ? JSON.parse(s) : initial;
-    } catch { return initial; }
+// ─── Supabase client ──────────────────────────────────────────────────────────
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+async function sb(table, method = "GET", body = null, params = "") {
+  const url = `${SUPABASE_URL}/rest/v1/${table}${params}`;
+  const res = await fetch(url, {
+    method,
+    headers: {
+      "apikey": SUPABASE_KEY,
+      "Authorization": `Bearer ${SUPABASE_KEY}`,
+      "Content-Type": "application/json",
+      "Prefer": method === "POST" ? "resolution=merge-duplicates" : "",
+    },
+    body: body ? JSON.stringify(body) : null,
   });
-  const set = useCallback((v) => {
-    setValue(prev => {
-      const next = typeof v === "function" ? v(prev) : v;
-      try { localStorage.setItem(key, JSON.stringify(next)); } catch {}
-      return next;
-    });
-  }, [key]);
-  return [value, set];
+  if (method === "GET") return res.json();
+  return res.ok;
 }
 
 // ─── defaults ─────────────────────────────────────────────────────────────────
@@ -33,8 +35,8 @@ const DEFAULT_CATEGORIES = [
 ];
 
 const DEFAULT_CARDS = [
-  { id:"efectivo", name:"Efectivo", color:"#10b981", closingDay: null },
-  { id:"debito",   name:"Débito",   color:"#3b82f6", closingDay: null },
+  { id:"efectivo", name:"Efectivo", color:"#10b981", closing_day: null },
+  { id:"debito",   name:"Débito",   color:"#3b82f6", closing_day: null },
 ];
 
 function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2); }
@@ -43,23 +45,18 @@ function monthKey(date) {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
 }
 function formatARS(n) {
-  return new Intl.NumberFormat("es-AR",{style:"currency",currency:"ARS",maximumFractionDigits:0}).format(n);
+  return new Intl.NumberFormat("es-AR",{style:"currency",currency:"ARS",maximumFractionDigits:0}).format(n||0);
 }
 function today() { return new Date().toISOString().slice(0,10); }
 
-// ─── Period helpers ───────────────────────────────────────────────────────────
-// closingPeriodKey: "YYYY-MM" where MM is the month the period CLOSES
-// e.g. closing day = 15: period "2025-06" = May 16 → Jun 15
 function closingPeriodKey(date, closingDay) {
   const d = new Date(date + "T12:00:00");
-  // If day > closingDay, this expense belongs to the NEXT period
   if (d.getDate() > closingDay) {
     const next = new Date(d.getFullYear(), d.getMonth() + 1, 1);
     return `${next.getFullYear()}-${String(next.getMonth()+1).padStart(2,"0")}`;
   }
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
 }
-
 function closingPeriodLabel(periodKey, closingDay) {
   const [y, m] = periodKey.split("-").map(Number);
   const closeDate = new Date(y, m - 1, closingDay);
@@ -67,7 +64,6 @@ function closingPeriodLabel(periodKey, closingDay) {
   const fmt = d => d.toLocaleDateString("es-AR", { day:"numeric", month:"short" });
   return `${fmt(openDate)} – ${fmt(closeDate)}`;
 }
-
 function prevPeriodKey(key) {
   const [y,m] = key.split("-").map(Number);
   const d = new Date(y, m - 2, 1);
@@ -82,50 +78,83 @@ function nextPeriodKey(key) {
 // ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
   const [tab,           setTab]           = useState("dashboard");
-  const [viewMode,      setViewMode]      = useStorage("gst_viewmode", "mes"); // "mes" | "cierre"
-  const [expenses,      setExpenses]      = useStorage("gst_expenses",  []);
-  const [fixedExpenses, setFixedExpenses] = useStorage("gst_fixed",     []);
-  const [cards,         setCards]         = useStorage("gst_cards",     DEFAULT_CARDS);
-  const [categories]                      = useStorage("gst_categories", DEFAULT_CATEGORIES);
-  const [settings,      setSettings]      = useStorage("gst_settings",  { budget:0, income:0 });
-  const [modal,         setModal]         = useState(null);
-  const [editing,       setEditing]       = useState(null);
+  const [viewMode,      setViewMode]      = useState("mes");
+  const [viewPeriod,    setViewPeriod]    = useState(monthKey(new Date()));
+  const [cierreCardId,  setCierreCardId]  = useState(null);
   const [filterCat,     setFilterCat]     = useState("all");
   const [filterCard,    setFilterCard]    = useState("all");
-  const [viewPeriod,    setViewPeriod]    = useState(monthKey(new Date()));
-  // In cierre mode, which card's closing day to use
-  const [cierreCardId,  setCierreCardId]  = useState(null);
+  const [modal,         setModal]         = useState(null);
+  const [editing,       setEditing]       = useState(null);
+
+  // ── data state ──
+  const [expenses,      setExpenses]      = useState([]);
+  const [fixedExpenses, setFixedExpenses] = useState([]);
+  const [cards,         setCards]         = useState(DEFAULT_CARDS);
+  const [settings,      setSettings]      = useState({ budget:0, income:0 });
+  const [loading,       setLoading]       = useState(true);
+  const [syncing,       setSyncing]       = useState(false);
+
+  const categories = DEFAULT_CATEGORIES;
+
+  // ── load all data on mount ──
+  useEffect(() => {
+    async function load() {
+      setLoading(true);
+      try {
+        const [exp, fixed, cds, stg] = await Promise.all([
+          sb("expenses", "GET", null, "?order=date.desc"),
+          sb("fixed_expenses", "GET", null, "?order=created_at.asc"),
+          sb("cards", "GET", null, "?order=created_at.asc"),
+          sb("settings", "GET", null, "?id=eq.default"),
+        ]);
+        if (Array.isArray(exp))   setExpenses(exp.map(e => ({ ...e, isFixed: e.is_fixed, fixedRef: e.fixed_ref })));
+        if (Array.isArray(fixed)) setFixedExpenses(fixed);
+        if (Array.isArray(cds) && cds.length > 0) setCards(cds.map(c => ({ ...c, closingDay: c.closing_day })));
+        else {
+          // insert default cards if none exist
+          await sb("cards", "POST", DEFAULT_CARDS.map(c => ({ ...c, closing_day: c.closing_day })));
+        }
+        if (Array.isArray(stg) && stg.length > 0) setSettings(stg[0]);
+        else await sb("settings", "POST", [{ id:"default", budget:0, income:0 }]);
+      } catch(e) { console.error("Load error", e); }
+      setLoading(false);
+    }
+    load();
+  }, []);
 
   // apply fixed expenses once per calendar month
   useEffect(() => {
+    if (loading || fixedExpenses.length === 0) return;
     const mk = monthKey(new Date());
     const already = expenses.some(e => e.fixedRef && monthKey(e.date) === mk);
-    if (!already && fixedExpenses.length > 0) {
-      setExpenses(prev => [...prev, ...fixedExpenses.map(f => ({
-        ...f, id:genId(), date:today(), fixedRef:f.id, isFixed:true,
-      }))]);
+    if (!already) {
+      const toAdd = fixedExpenses.map(f => ({
+        id: genId(), description: f.description, amount: f.amount,
+        category: f.category, card: f.card, date: today(),
+        is_fixed: true, fixed_ref: f.id,
+      }));
+      Promise.all(toAdd.map(e => sb("expenses", "POST", [e]))).then(() => {
+        setExpenses(prev => [...prev, ...toAdd.map(e => ({ ...e, isFixed: true, fixedRef: e.fixed_ref }))]);
+      });
     }
-  }, [fixedExpenses]);
+  }, [loading, fixedExpenses]);
 
-  // init cierreCardId to first card with a closingDay
+  // init cierreCardId
   useEffect(() => {
-    if (!cierreCardId) {
-      const first = cards.find(c => c.closingDay);
-      if (first) setCierreCardId(first.id);
-      else setCierreCardId(cards[0]?.id || null);
+    if (!cierreCardId && cards.length > 0) {
+      const first = cards.find(c => c.closingDay || c.closing_day);
+      setCierreCardId(first?.id || cards[0]?.id);
     }
   }, [cards]);
 
-  // active card for cierre mode
+  // ── period ──
   const cierreCard = cards.find(c => c.id === cierreCardId) || cards[0];
-  const closingDay = cierreCard?.closingDay || null;
+  const closingDay = cierreCard?.closingDay || cierreCard?.closing_day || null;
+  const isCurrentPeriod = viewPeriod === monthKey(new Date());
 
-  // ── filtered expenses for current period ──
   const periodExpenses = expenses.filter(e => {
     if (viewMode === "mes") return monthKey(e.date) === viewPeriod;
     if (!closingDay) return monthKey(e.date) === viewPeriod;
-    // cierre mode: only expenses for this card, in this closing period
-    if (filterCard !== "all" && e.card !== filterCard && filterCard === cierreCardId) return false;
     return closingPeriodKey(e.date, closingDay) === viewPeriod;
   });
 
@@ -136,16 +165,11 @@ export default function App() {
 
   const totalPeriod = periodExpenses.reduce((s,e) => s + Number(e.amount), 0);
   const budgetPct   = settings.budget > 0 ? Math.min(100,(totalPeriod/settings.budget)*100) : 0;
-  const remaining   = settings.income - totalPeriod;
+  const remaining   = (settings.income || 0) - totalPeriod;
 
   const catTotals = DEFAULT_CATEGORIES.map(c => ({
     ...c, total: periodExpenses.filter(e=>e.category===c.id).reduce((s,e)=>s+Number(e.amount),0)
   })).filter(c=>c.total>0).sort((a,b)=>b.total-a.total);
-
-  // ── period nav ──
-  const isCurrentPeriod = viewPeriod === monthKey(new Date());
-  function prev() { setViewPeriod(prevPeriodKey(viewPeriod)); }
-  function next() { if (!isCurrentPeriod) setViewPeriod(nextPeriodKey(viewPeriod)); }
 
   const periodLabel = (() => {
     if (viewMode === "mes") {
@@ -158,51 +182,86 @@ export default function App() {
   })();
 
   // ── CRUD ──
-  function saveExpense(data) {
-    if (editing) setExpenses(prev => prev.map(e => e.id===editing.id ? {...e,...data} : e));
-    else         setExpenses(prev => [...prev, {id:genId(),...data}]);
-    setModal(null); setEditing(null);
+  async function saveExpense(data) {
+    setSyncing(true);
+    const row = {
+      id: editing?.id || genId(),
+      description: data.description, amount: data.amount,
+      category: data.category, card: data.card, date: data.date,
+      is_fixed: false, fixed_ref: null,
+    };
+    await sb("expenses", "POST", [row]);
+    if (editing) setExpenses(prev => prev.map(e => e.id===row.id ? {...e,...row,isFixed:false} : e));
+    else         setExpenses(prev => [...prev, {...row, isFixed:false}]);
+    setSyncing(false); setModal(null); setEditing(null);
   }
-  function deleteExpense(id) { setExpenses(prev=>prev.filter(e=>e.id!==id)); }
 
-  function saveFixed(data) {
-    if (editing) setFixedExpenses(prev => prev.map(e => e.id===editing.id ? {...e,...data} : e));
-    else         setFixedExpenses(prev => [...prev, {id:genId(),...data}]);
-    setModal(null); setEditing(null);
+  async function deleteExpense(id) {
+    setSyncing(true);
+    await sb("expenses", "DELETE", null, `?id=eq.${id}`);
+    setExpenses(prev => prev.filter(e => e.id !== id));
+    setSyncing(false); setModal(null); setEditing(null);
   }
-  function deleteFixed(id) { setFixedExpenses(prev=>prev.filter(e=>e.id!==id)); }
 
-  function saveCard(data) {
-    if (editing) setCards(prev => prev.map(c => c.id===editing.id ? {...c,...data} : c));
-    else         setCards(prev => [...prev, {id:genId(),...data}]);
-    setModal(null); setEditing(null);
+  async function saveFixed(data) {
+    setSyncing(true);
+    const row = {
+      id: editing?.id || genId(),
+      description: data.description, amount: data.amount,
+      category: data.category, card: data.card, is_fixed: true,
+    };
+    await sb("fixed_expenses", "POST", [row]);
+    if (editing) setFixedExpenses(prev => prev.map(e => e.id===row.id ? {...e,...row} : e));
+    else         setFixedExpenses(prev => [...prev, row]);
+    setSyncing(false); setModal(null); setEditing(null);
   }
-  function deleteCard(id) { setCards(prev=>prev.filter(c=>c.id!==id)); }
 
-  function exportData() {
-    const blob = new Blob([JSON.stringify({expenses,fixedExpenses,cards,settings},null,2)],{type:"application/json"});
-    const a = document.createElement("a"); a.href=URL.createObjectURL(blob);
-    a.download=`gastos-backup-${today()}.json`; a.click();
+  async function deleteFixed(id) {
+    setSyncing(true);
+    await sb("fixed_expenses", "DELETE", null, `?id=eq.${id}`);
+    setFixedExpenses(prev => prev.filter(e => e.id !== id));
+    setSyncing(false); setModal(null); setEditing(null);
   }
-  function importData(e) {
-    const file=e.target.files[0]; if(!file) return;
-    const r=new FileReader();
-    r.onload=ev=>{ try {
-      const d=JSON.parse(ev.target.result);
-      if(d.expenses)      setExpenses(d.expenses);
-      if(d.fixedExpenses) setFixedExpenses(d.fixedExpenses);
-      if(d.cards)         setCards(d.cards);
-      if(d.settings)      setSettings(d.settings);
-      alert("Datos importados correctamente");
-    } catch { alert("Archivo no válido"); }};
-    r.readAsText(file);
+
+  async function saveCard(data) {
+    setSyncing(true);
+    const row = {
+      id: editing?.id || genId(),
+      name: data.name, color: data.color,
+      closing_day: data.closingDay || null,
+    };
+    await sb("cards", "POST", [row]);
+    const mapped = { ...row, closingDay: row.closing_day };
+    if (editing) setCards(prev => prev.map(c => c.id===row.id ? mapped : c));
+    else         setCards(prev => [...prev, mapped]);
+    setSyncing(false); setModal(null); setEditing(null);
+  }
+
+  async function deleteCard(id) {
+    setSyncing(true);
+    await sb("cards", "DELETE", null, `?id=eq.${id}`);
+    setCards(prev => prev.filter(c => c.id !== id));
+    setSyncing(false); setModal(null); setEditing(null);
+  }
+
+  async function saveSettings(data) {
+    setSyncing(true);
+    await sb("settings", "POST", [{ id:"default", budget: data.budget||0, income: data.income||0 }]);
+    setSettings(data);
+    setSyncing(false); setModal(null);
   }
 
   const getCat  = id => categories.find(c=>c.id===id) || categories.find(c=>c.id==="otros");
   const getCard = id => cards.find(c=>c.id===id);
+  const noClosingDaySet = viewMode === "cierre" && !closingDay;
 
-  const cardsWithClosing = cards.filter(c => c.closingDay);
-  const noClosingDaySet  = viewMode === "cierre" && !closingDay;
+  if (loading) return (
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:"100vh",background:"#0f0f13",color:"#f1f1f5",gap:16}}>
+      <div style={{fontSize:40}}>💸</div>
+      <div style={{fontWeight:600,fontSize:18}}>Cargando...</div>
+      <div style={{fontSize:13,color:"#8888a0"}}>Conectando con Supabase</div>
+    </div>
+  );
 
   return (
     <>
@@ -219,7 +278,10 @@ export default function App() {
         input,select,textarea{font:inherit;color:inherit;background:none;border:none;outline:none}
         .app{display:flex;flex-direction:column;min-height:100vh;max-width:480px;margin:0 auto}
         .topbar{position:sticky;top:0;z-index:10;background:var(--bg);padding:14px 20px 10px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}
-        .topbar-title{font-size:18px;font-weight:600;letter-spacing:-.3px}
+        .topbar-title{font-size:18px;font-weight:600;letter-spacing:-.3px;display:flex;align-items:center;gap:8px}
+        .sync-dot{width:7px;height:7px;border-radius:50%;background:var(--success)}
+        .sync-dot.syncing{background:var(--warn);animation:pulse 1s infinite}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
         .topbar-actions{display:flex;gap:8px}
         .icon-btn{width:36px;height:36px;border-radius:50%;background:var(--surface);display:flex;align-items:center;justify-content:center;font-size:16px;transition:background .15s}
         .icon-btn:hover{background:var(--surface2)}
@@ -230,23 +292,18 @@ export default function App() {
         .nav-icon{font-size:20px}
         .card{background:var(--surface);border-radius:var(--radius);padding:18px}
         .card-sm{background:var(--surface);border-radius:var(--radius-sm);padding:14px}
-        /* period nav */
         .period-nav{display:flex;flex-direction:column;gap:8px;background:var(--surface);border-radius:var(--radius-sm);padding:12px 14px}
         .period-nav-row{display:flex;align-items:center;justify-content:space-between}
         .period-nav-label{font-weight:500;text-transform:capitalize;font-size:15px}
-        .period-nav-sub{font-size:11px;color:var(--muted);text-transform:capitalize}
+        .period-nav-sub{font-size:11px;color:var(--muted);text-align:center}
         .period-btn{width:30px;height:30px;border-radius:50%;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:16px}
         .period-btn:hover{background:var(--border)}
-        /* mode toggle */
         .mode-toggle{display:flex;background:var(--surface2);border-radius:99px;padding:3px;gap:2px}
         .mode-btn{flex:1;padding:5px 12px;border-radius:99px;font-size:12px;font-weight:500;color:var(--muted);transition:all .2s;white-space:nowrap}
         .mode-btn.active{background:var(--accent);color:#fff}
-        /* cierre card selector */
         .cierre-cards{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}
         .cierre-cards::-webkit-scrollbar{display:none}
         .cierre-card-btn{padding:5px 12px;border-radius:99px;font-size:12px;font-weight:500;border:1px solid var(--border);white-space:nowrap;transition:all .2s;flex-shrink:0}
-        .cierre-card-btn.active{color:#fff}
-        /* stats */
         .stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
         .stat{background:var(--surface);border-radius:var(--radius-sm);padding:14px}
         .stat-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
@@ -299,55 +356,40 @@ export default function App() {
       `}</style>
 
       <div className="app">
-        {/* topbar */}
         <div className="topbar">
-          <span className="topbar-title">💸 Mis Gastos</span>
+          <span className="topbar-title">
+            💸 Mis Gastos
+            <span className={`sync-dot ${syncing?"syncing":""}`} title={syncing?"Guardando...":"Sincronizado"}/>
+          </span>
           <div className="topbar-actions">
             <button className="icon-btn" onClick={()=>setModal("settings")}>⚙️</button>
-            <button className="icon-btn" onClick={()=>setModal("backup")}>💾</button>
           </div>
         </div>
 
         <div className="content">
-
-          {/* ── period nav (hidden on análisis) ── */}
           {tab !== "analisis" && (
             <div className="period-nav">
-              {/* mode toggle + period arrows */}
               <div className="period-nav-row">
-                <button className="period-btn" onClick={prev}>‹</button>
+                <button className="period-btn" onClick={()=>setViewPeriod(prevPeriodKey(viewPeriod))}>‹</button>
                 <div style={{textAlign:"center"}}>
                   <div className="period-nav-label">{periodLabel}</div>
-                  {viewMode === "cierre" && closingDay && (
-                    <div className="period-nav-sub">cierre día {closingDay}</div>
-                  )}
+                  {viewMode==="cierre"&&closingDay&&<div className="period-nav-sub">cierre día {closingDay}</div>}
                 </div>
-                <button className="period-btn" onClick={next} style={{opacity:isCurrentPeriod?.3:1}}>›</button>
+                <button className="period-btn" onClick={()=>{if(!isCurrentPeriod)setViewPeriod(nextPeriodKey(viewPeriod))}} style={{opacity:isCurrentPeriod?.3:1}}>›</button>
               </div>
-
-              {/* Mes / Cierre toggle */}
               <div style={{display:"flex",gap:8,alignItems:"center"}}>
                 <div className="mode-toggle" style={{flex:1}}>
-                  <button className={`mode-btn ${viewMode==="mes"?"active":""}`}
-                    onClick={()=>{ setViewMode("mes"); setViewPeriod(monthKey(new Date())); }}>
-                    📅 Por mes
-                  </button>
-                  <button className={`mode-btn ${viewMode==="cierre"?"active":""}`}
-                    onClick={()=>{ setViewMode("cierre"); setViewPeriod(monthKey(new Date())); }}>
-                    💳 Por cierre
-                  </button>
+                  <button className={`mode-btn ${viewMode==="mes"?"active":""}`} onClick={()=>{setViewMode("mes");setViewPeriod(monthKey(new Date()));}}>📅 Por mes</button>
+                  <button className={`mode-btn ${viewMode==="cierre"?"active":""}`} onClick={()=>{setViewMode("cierre");setViewPeriod(monthKey(new Date()));}}>💳 Por cierre</button>
                 </div>
               </div>
-
-              {/* cierre: card selector */}
-              {viewMode === "cierre" && (
+              {viewMode==="cierre"&&(
                 <div className="cierre-cards">
-                  {cards.map(c => (
-                    <button key={c.id}
-                      className={`cierre-card-btn ${cierreCardId===c.id?"active":""}`}
-                      style={cierreCardId===c.id ? {background:c.color, borderColor:c.color} : {}}
-                      onClick={()=>{ setCierreCardId(c.id); setViewPeriod(monthKey(new Date())); }}>
-                      {c.name} {c.closingDay ? `(día ${c.closingDay})` : "⚠️"}
+                  {cards.map(c=>(
+                    <button key={c.id} className={`cierre-card-btn ${cierreCardId===c.id?"active":""}`}
+                      style={cierreCardId===c.id?{background:c.color,borderColor:c.color,color:"#fff"}:{}}
+                      onClick={()=>{setCierreCardId(c.id);setViewPeriod(monthKey(new Date()));}}>
+                      {c.name} {(c.closingDay||c.closing_day)?`(día ${c.closingDay||c.closing_day})`:"⚠️"}
                     </button>
                   ))}
                 </div>
@@ -355,113 +397,83 @@ export default function App() {
             </div>
           )}
 
-          {/* warning if cierre mode but no closing day configured */}
-          {tab !== "analisis" && noClosingDaySet && (
-            <div className="warning-box">
-              ⚠️ Esta tarjeta no tiene día de cierre configurado. Editala en <strong>Tarjetas</strong> para activar el modo cierre.
-            </div>
+          {tab!=="analisis"&&noClosingDaySet&&(
+            <div className="warning-box">⚠️ Esta tarjeta no tiene día de cierre. Editala en <strong>Tarjetas</strong>.</div>
           )}
 
-          {/* ── DASHBOARD ── */}
-          {tab === "dashboard" && (
+          {/* DASHBOARD */}
+          {tab==="dashboard"&&(
             <>
               <div className="stats-grid">
                 <div className="stat">
                   <div className="stat-label">Gasté</div>
-                  <div className={`stat-val ${settings.budget>0&&totalPeriod>settings.budget?"danger":""}`}>
-                    {formatARS(totalPeriod)}
-                  </div>
+                  <div className={`stat-val ${settings.budget>0&&totalPeriod>settings.budget?"danger":""}`}>{formatARS(totalPeriod)}</div>
                 </div>
                 <div className="stat">
                   <div className="stat-label">{remaining>=0?"Me queda":"Me pasé"}</div>
-                  <div className={`stat-val ${remaining>=0?"success":"danger"}`}>
-                    {formatARS(Math.abs(remaining))}
-                  </div>
+                  <div className={`stat-val ${remaining>=0?"success":"danger"}`}>{formatARS(Math.abs(remaining))}</div>
                 </div>
               </div>
-
-              {settings.budget > 0 && (
+              {settings.budget>0&&(
                 <div className="budget-bar-wrap">
-                  <div className="budget-bar-labels">
-                    <span>Presupuesto</span>
-                    <span>{Math.round(budgetPct)}%</span>
-                  </div>
+                  <div className="budget-bar-labels"><span>Presupuesto</span><span>{Math.round(budgetPct)}%</span></div>
                   <div className="budget-bar-track">
-                    <div className="budget-bar-fill" style={{
-                      width:`${budgetPct}%`,
-                      background: budgetPct>90?"var(--danger)":budgetPct>70?"var(--warn)":"var(--accent)"
-                    }}/>
+                    <div className="budget-bar-fill" style={{width:`${budgetPct}%`,background:budgetPct>90?"var(--danger)":budgetPct>70?"var(--warn)":"var(--accent)"}}/>
                   </div>
                   <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"var(--muted)",marginTop:6}}>
                     <span>{formatARS(totalPeriod)}</span><span>{formatARS(settings.budget)}</span>
                   </div>
                 </div>
               )}
-
-              {catTotals.length > 0 ? (
+              {catTotals.length>0?(
                 <div className="card">
                   <div className="section-title" style={{marginBottom:12}}>Por categoría</div>
-                  {catTotals.map(c => (
+                  {catTotals.map(c=>(
                     <div className="cat-row" key={c.id}>
                       <div className="cat-icon" style={{background:c.color+"22"}}>{c.icon}</div>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{display:"flex",justifyContent:"space-between",marginBottom:4,fontSize:13}}>
-                          <span>{c.name}</span>
-                          <span style={{fontWeight:600}}>{formatARS(c.total)}</span>
+                          <span>{c.name}</span><span style={{fontWeight:600}}>{formatARS(c.total)}</span>
                         </div>
-                        <div className="cat-bar">
-                          <div className="cat-bar-fill" style={{width:`${(c.total/totalPeriod*100).toFixed(0)}%`,background:c.color}}/>
-                        </div>
+                        <div className="cat-bar"><div className="cat-bar-fill" style={{width:`${(c.total/totalPeriod*100).toFixed(0)}%`,background:c.color}}/></div>
                       </div>
                     </div>
                   ))}
                 </div>
-              ) : (
-                <div className="empty">
-                  <div className="empty-icon">📊</div>
-                  <div>No hay gastos en este período</div>
-                  <div style={{fontSize:13,marginTop:4}}>Agregá uno con el botón +</div>
-                </div>
+              ):(
+                <div className="empty"><div className="empty-icon">📊</div><div>No hay gastos en este período</div><div style={{fontSize:13,marginTop:4}}>Agregá uno con el botón +</div></div>
               )}
             </>
           )}
 
-          {/* ── GASTOS ── */}
-          {tab === "gastos" && (
+          {/* GASTOS */}
+          {tab==="gastos"&&(
             <>
               <div className="filters">
                 <button className={`filter-btn ${filterCat==="all"?"active":""}`} onClick={()=>setFilterCat("all")}>Todos</button>
                 {categories.filter(c=>periodExpenses.some(e=>e.category===c.id)).map(c=>(
-                  <button key={c.id} className={`filter-btn ${filterCat===c.id?"active":""}`} onClick={()=>setFilterCat(c.id)}>
-                    {c.icon} {c.name}
-                  </button>
+                  <button key={c.id} className={`filter-btn ${filterCat===c.id?"active":""}`} onClick={()=>setFilterCat(c.id)}>{c.icon} {c.name}</button>
                 ))}
               </div>
               <div className="filters">
                 <button className={`filter-btn ${filterCard==="all"?"active":""}`} onClick={()=>setFilterCard("all")}>Todas</button>
-                {cards.map(c=>(
-                  <button key={c.id} className={`filter-btn ${filterCard===c.id?"active":""}`} onClick={()=>setFilterCard(c.id)}>
-                    {c.name}
-                  </button>
-                ))}
+                {cards.map(c=><button key={c.id} className={`filter-btn ${filterCard===c.id?"active":""}`} onClick={()=>setFilterCard(c.id)}>{c.name}</button>)}
               </div>
-
-              {activeExpenses.length === 0 ? (
+              {activeExpenses.length===0?(
                 <div className="empty"><div className="empty-icon">🧾</div><div>No hay gastos</div></div>
-              ) : (
+              ):(
                 <div className="card">
-                  {activeExpenses.map(e => {
-                    const cat  = getCat(e.category);
-                    const card = getCard(e.card);
-                    return (
+                  {activeExpenses.map(e=>{
+                    const cat=getCat(e.category); const card=getCard(e.card);
+                    return(
                       <div key={e.id} className="expense-item" onClick={()=>{setEditing(e);setModal("expense")}}>
                         <div className="exp-icon" style={{background:(cat?.color||"#94a3b8")+"22"}}>{cat?.icon||"📦"}</div>
                         <div className="exp-info">
                           <div className="exp-name">{e.description||cat?.name}</div>
                           <div className="exp-meta">
                             {new Date(e.date+"T12:00:00").toLocaleDateString("es-AR",{day:"numeric",month:"short"})}
-                            {card && <span> · {card.name}</span>}
-                            {e.isFixed && <span className="chip" style={{background:"var(--accent)22",color:"var(--accent2)",marginLeft:4}}>fijo</span>}
+                            {card&&<span> · {card.name}</span>}
+                            {e.isFixed&&<span className="chip" style={{background:"var(--accent)22",color:"var(--accent2)",marginLeft:4}}>fijo</span>}
                           </div>
                         </div>
                         <div className="exp-amount">-{formatARS(e.amount)}</div>
@@ -473,29 +485,20 @@ export default function App() {
             </>
           )}
 
-          {/* ── FIJOS ── */}
-          {tab === "fijos" && (
+          {/* FIJOS */}
+          {tab==="fijos"&&(
             <>
-              <div className="card-sm" style={{fontSize:13,color:"var(--muted)",lineHeight:1.5}}>
-                Los gastos fijos se cargan automáticamente al inicio de cada mes.
-              </div>
-              {fixedExpenses.length === 0 ? (
-                <div className="empty">
-                  <div className="empty-icon">🔁</div>
-                  <div>No tenés gastos fijos</div>
-                  <div style={{fontSize:13,marginTop:4}}>Agregá alquiler, suscripciones, gym...</div>
-                </div>
-              ) : (
+              <div className="card-sm" style={{fontSize:13,color:"var(--muted)",lineHeight:1.5}}>Los gastos fijos se cargan automáticamente al inicio de cada mes.</div>
+              {fixedExpenses.length===0?(
+                <div className="empty"><div className="empty-icon">🔁</div><div>No tenés gastos fijos</div><div style={{fontSize:13,marginTop:4}}>Agregá alquiler, suscripciones, gym...</div></div>
+              ):(
                 <div className="card">
-                  {fixedExpenses.map(e => {
-                    const cat = getCat(e.category);
-                    return (
+                  {fixedExpenses.map(e=>{
+                    const cat=getCat(e.category);
+                    return(
                       <div key={e.id} className="fixed-item" onClick={()=>{setEditing(e);setModal("fixed")}}>
                         <div className="exp-icon" style={{background:(cat?.color||"#94a3b8")+"22"}}>{cat?.icon||"📦"}</div>
-                        <div className="exp-info">
-                          <div className="exp-name">{e.description||cat?.name}</div>
-                          <div className="exp-meta">{cat?.name}</div>
-                        </div>
+                        <div className="exp-info"><div className="exp-name">{e.description||cat?.name}</div><div className="exp-meta">{cat?.name}</div></div>
                         <div className="exp-amount">{formatARS(e.amount)}</div>
                       </div>
                     );
@@ -506,23 +509,21 @@ export default function App() {
             </>
           )}
 
-          {/* ── TARJETAS ── */}
-          {tab === "tarjetas" && (
+          {/* TARJETAS */}
+          {tab==="tarjetas"&&(
             <>
-              {cards.map(c => {
-                const cardTotal = periodExpenses.filter(e=>e.card===c.id).reduce((s,e)=>s+Number(e.amount),0);
-                return (
-                  <div key={c.id} className="card" style={{borderLeft:`3px solid ${c.color}`}}
-                    onClick={()=>{setEditing(c);setModal("card")}}>
+              {cards.map(c=>{
+                const cardTotal=periodExpenses.filter(e=>e.card===c.id).reduce((s,e)=>s+Number(e.amount),0);
+                return(
+                  <div key={c.id} className="card" style={{borderLeft:`3px solid ${c.color}`}} onClick={()=>{setEditing(c);setModal("card")}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                       <div>
                         <div style={{fontWeight:600,fontSize:16}}>{c.name}</div>
                         <div style={{fontSize:12,color:"var(--muted)",marginTop:2,display:"flex",gap:8,alignItems:"center"}}>
                           <span>{periodExpenses.filter(e=>e.card===c.id).length} gastos</span>
-                          {c.closingDay
-                            ? <span className="chip" style={{background:"var(--accent)22",color:"var(--accent2)"}}>cierra día {c.closingDay}</span>
-                            : <span className="chip" style={{background:"var(--warn)22",color:"var(--warn)"}}>sin día de cierre</span>
-                          }
+                          {(c.closingDay||c.closing_day)
+                            ?<span className="chip" style={{background:"var(--accent)22",color:"var(--accent2)"}}>cierra día {c.closingDay||c.closing_day}</span>
+                            :<span className="chip" style={{background:"var(--warn)22",color:"var(--warn)"}}>sin día de cierre</span>}
                         </div>
                       </div>
                       <div style={{fontWeight:700,fontSize:18}}>{formatARS(cardTotal)}</div>
@@ -534,197 +535,96 @@ export default function App() {
             </>
           )}
 
-          {/* ── ANÁLISIS IA ── */}
-          {tab === "analisis" && <AnalisisTab cards={cards} />}
-
+          {tab==="analisis"&&<AnalisisTab cards={cards}/>}
         </div>
 
-        {tab === "gastos" && (
-          <button className="fab" onClick={()=>{setEditing(null);setModal("expense")}}>+</button>
-        )}
+        {tab==="gastos"&&<button className="fab" onClick={()=>{setEditing(null);setModal("expense")}}>+</button>}
 
         <nav className="nav">
-          {[
-            {id:"dashboard",icon:"📊",label:"Resumen"},
-            {id:"gastos",   icon:"🧾",label:"Gastos"},
-            {id:"fijos",    icon:"🔁",label:"Fijos"},
-            {id:"tarjetas", icon:"💳",label:"Tarjetas"},
-            {id:"analisis", icon:"🤖",label:"IA"},
-          ].map(n=>(
+          {[{id:"dashboard",icon:"📊",label:"Resumen"},{id:"gastos",icon:"🧾",label:"Gastos"},{id:"fijos",icon:"🔁",label:"Fijos"},{id:"tarjetas",icon:"💳",label:"Tarjetas"},{id:"analisis",icon:"🤖",label:"IA"}].map(n=>(
             <button key={n.id} className={`nav-item ${tab===n.id?"active":""}`} onClick={()=>setTab(n.id)}>
-              <span className="nav-icon">{n.icon}</span>
-              <span>{n.label}</span>
+              <span className="nav-icon">{n.icon}</span><span>{n.label}</span>
             </button>
           ))}
         </nav>
       </div>
 
-      {/* ── MODALS ── */}
-      {modal==="expense" && (
-        <ExpenseModal expense={editing} categories={categories} cards={cards}
-          onSave={saveExpense}
-          onDelete={editing?()=>{deleteExpense(editing.id);setModal(null);setEditing(null);}:null}
-          onClose={()=>{setModal(null);setEditing(null)}} />
-      )}
-      {modal==="fixed" && (
-        <FixedModal expense={editing} categories={categories} cards={cards}
-          onSave={saveFixed}
-          onDelete={editing?()=>{deleteFixed(editing.id);setModal(null);setEditing(null);}:null}
-          onClose={()=>{setModal(null);setEditing(null)}} />
-      )}
-      {modal==="card" && (
-        <CardModal card={editing}
-          onSave={saveCard}
-          onDelete={editing?()=>{deleteCard(editing.id);setModal(null);setEditing(null);}:null}
-          onClose={()=>{setModal(null);setEditing(null)}} />
-      )}
-      {modal==="settings" && (
-        <SettingsModal settings={settings} onSave={s=>{setSettings(s);setModal(null)}} onClose={()=>setModal(null)} />
-      )}
-      {modal==="backup" && (
-        <BackupModal onExport={exportData} onImport={importData} onClose={()=>setModal(null)} />
-      )}
+      {modal==="expense"&&<ExpenseModal expense={editing} categories={categories} cards={cards} onSave={saveExpense} onDelete={editing?()=>deleteExpense(editing.id):null} onClose={()=>{setModal(null);setEditing(null)}}/>}
+      {modal==="fixed"&&<FixedModal expense={editing} categories={categories} cards={cards} onSave={saveFixed} onDelete={editing?()=>deleteFixed(editing.id):null} onClose={()=>{setModal(null);setEditing(null)}}/>}
+      {modal==="card"&&<CardModal card={editing} onSave={saveCard} onDelete={editing?()=>deleteCard(editing.id):null} onClose={()=>{setModal(null);setEditing(null)}}/>}
+      {modal==="settings"&&<SettingsModal settings={settings} onSave={saveSettings} onClose={()=>setModal(null)}/>}
     </>
   );
 }
 
-// ── ExpenseModal ──────────────────────────────────────────────────────────────
 function ExpenseModal({expense,categories,cards,onSave,onDelete,onClose}) {
-  const [form,setForm]=useState({
-    description:expense?.description||"",amount:expense?.amount||"",
-    category:expense?.category||categories[0]?.id||"",
-    card:expense?.card||cards[0]?.id||"",date:expense?.date||today(),
-  });
+  const [form,setForm]=useState({description:expense?.description||"",amount:expense?.amount||"",category:expense?.category||categories[0]?.id||"",card:expense?.card||cards[0]?.id||"",date:expense?.date||today()});
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="sheet" onClick={e=>e.stopPropagation()}>
-        <div className="sheet-title">{expense?"Editar gasto":"Nuevo gasto"}
-          <button onClick={onClose} style={{fontSize:20,color:"var(--muted)"}}>✕</button></div>
-        <div className="field"><label>Monto ($)</label>
-          <input type="number" placeholder="0" value={form.amount} onChange={e=>set("amount",e.target.value)} autoFocus/></div>
-        <div className="field"><label>Descripción</label>
-          <input type="text" placeholder="Ej: Almuerzo" value={form.description} onChange={e=>set("description",e.target.value)}/></div>
-        <div className="field"><label>Categoría</label>
-          <select value={form.category} onChange={e=>set("category",e.target.value)}>
-            {categories.map(c=><option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}</select></div>
-        <div className="field"><label>Medio de pago</label>
-          <select value={form.card} onChange={e=>set("card",e.target.value)}>
-            {cards.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-        <div className="field"><label>Fecha</label>
-          <input type="date" value={form.date} onChange={e=>set("date",e.target.value)}/></div>
-        <button className="btn btn-primary" onClick={()=>{if(form.amount)onSave(form)}}>
-          {expense?"Guardar cambios":"Agregar gasto"}</button>
-        {onDelete&&<button className="btn btn-danger" onClick={onDelete}>Eliminar gasto</button>}
-      </div>
-    </div>
+  return(
+    <div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}>
+      <div className="sheet-title">{expense?"Editar gasto":"Nuevo gasto"}<button onClick={onClose} style={{fontSize:20,color:"var(--muted)"}}>✕</button></div>
+      <div className="field"><label>Monto ($)</label><input type="number" placeholder="0" value={form.amount} onChange={e=>set("amount",e.target.value)} autoFocus/></div>
+      <div className="field"><label>Descripción</label><input type="text" placeholder="Ej: Almuerzo" value={form.description} onChange={e=>set("description",e.target.value)}/></div>
+      <div className="field"><label>Categoría</label><select value={form.category} onChange={e=>set("category",e.target.value)}>{categories.map(c=><option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}</select></div>
+      <div className="field"><label>Medio de pago</label><select value={form.card} onChange={e=>set("card",e.target.value)}>{cards.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+      <div className="field"><label>Fecha</label><input type="date" value={form.date} onChange={e=>set("date",e.target.value)}/></div>
+      <button className="btn btn-primary" onClick={()=>{if(form.amount)onSave(form)}}>{expense?"Guardar cambios":"Agregar gasto"}</button>
+      {onDelete&&<button className="btn btn-danger" onClick={onDelete}>Eliminar gasto</button>}
+    </div></div>
   );
 }
 
-// ── FixedModal ────────────────────────────────────────────────────────────────
 function FixedModal({expense,categories,cards,onSave,onDelete,onClose}) {
-  const [form,setForm]=useState({
-    description:expense?.description||"",amount:expense?.amount||"",
-    category:expense?.category||categories[0]?.id||"",card:expense?.card||cards[0]?.id||"",
-  });
+  const [form,setForm]=useState({description:expense?.description||"",amount:expense?.amount||"",category:expense?.category||categories[0]?.id||"",card:expense?.card||cards[0]?.id||""});
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="sheet" onClick={e=>e.stopPropagation()}>
-        <div className="sheet-title">{expense?"Editar gasto fijo":"Nuevo gasto fijo"}
-          <button onClick={onClose} style={{fontSize:20,color:"var(--muted)"}}>✕</button></div>
-        <div className="field"><label>Monto ($)</label>
-          <input type="number" placeholder="0" value={form.amount} onChange={e=>set("amount",e.target.value)} autoFocus/></div>
-        <div className="field"><label>Descripción</label>
-          <input type="text" placeholder="Ej: Alquiler" value={form.description} onChange={e=>set("description",e.target.value)}/></div>
-        <div className="field"><label>Categoría</label>
-          <select value={form.category} onChange={e=>set("category",e.target.value)}>
-            {categories.map(c=><option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}</select></div>
-        <div className="field"><label>Medio de pago</label>
-          <select value={form.card} onChange={e=>set("card",e.target.value)}>
-            {cards.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-        <button className="btn btn-primary" onClick={()=>{if(form.amount)onSave({...form,isFixed:true})}}>
-          {expense?"Guardar cambios":"Agregar gasto fijo"}</button>
-        {onDelete&&<button className="btn btn-danger" onClick={onDelete}>Eliminar</button>}
-      </div>
-    </div>
+  return(
+    <div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}>
+      <div className="sheet-title">{expense?"Editar gasto fijo":"Nuevo gasto fijo"}<button onClick={onClose} style={{fontSize:20,color:"var(--muted)"}}>✕</button></div>
+      <div className="field"><label>Monto ($)</label><input type="number" placeholder="0" value={form.amount} onChange={e=>set("amount",e.target.value)} autoFocus/></div>
+      <div className="field"><label>Descripción</label><input type="text" placeholder="Ej: Alquiler" value={form.description} onChange={e=>set("description",e.target.value)}/></div>
+      <div className="field"><label>Categoría</label><select value={form.category} onChange={e=>set("category",e.target.value)}>{categories.map(c=><option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}</select></div>
+      <div className="field"><label>Medio de pago</label><select value={form.card} onChange={e=>set("card",e.target.value)}>{cards.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+      <button className="btn btn-primary" onClick={()=>{if(form.amount)onSave({...form,isFixed:true})}}>{expense?"Guardar cambios":"Agregar gasto fijo"}</button>
+      {onDelete&&<button className="btn btn-danger" onClick={onDelete}>Eliminar</button>}
+    </div></div>
   );
 }
 
-// ── CardModal ─────────────────────────────────────────────────────────────────
 function CardModal({card,onSave,onDelete,onClose}) {
   const COLORS=["#6366f1","#10b981","#3b82f6","#f59e0b","#ef4444","#ec4899","#8b5cf6","#14b8a6"];
-  const [form,setForm]=useState({name:card?.name||"",color:card?.color||COLORS[0],closingDay:card?.closingDay||""});
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="sheet" onClick={e=>e.stopPropagation()}>
-        <div className="sheet-title">{card?"Editar tarjeta":"Nueva tarjeta"}
-          <button onClick={onClose} style={{fontSize:20,color:"var(--muted)"}}>✕</button></div>
-        <div className="field"><label>Nombre</label>
-          <input type="text" placeholder="Ej: Visa, Naranja, Débito" value={form.name}
-            onChange={e=>setForm(f=>({...f,name:e.target.value}))} autoFocus/></div>
-        <div className="field">
-          <label>Día de cierre</label>
-          <input type="number" min="1" max="31" placeholder="Ej: 15 (dejá vacío si no aplica)"
-            value={form.closingDay}
-            onChange={e=>setForm(f=>({...f,closingDay:e.target.value?Number(e.target.value):null}))}/>
-          <div style={{fontSize:11,color:"var(--muted)",marginTop:5,lineHeight:1.5}}>
-            Si tu tarjeta cierra el 15, los gastos del 16 en adelante van al próximo período.
-          </div>
-        </div>
-        <div className="field"><label>Color</label>
-          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:4}}>
-            {COLORS.map(c=>(
-              <button key={c} onClick={()=>setForm(f=>({...f,color:c}))}
-                style={{width:28,height:28,borderRadius:"50%",background:c,border:form.color===c?"3px solid white":"3px solid transparent"}}/>
-            ))}</div></div>
-        <button className="btn btn-primary" onClick={()=>{if(form.name)onSave(form)}}>
-          {card?"Guardar":"Agregar tarjeta"}</button>
-        {onDelete&&<button className="btn btn-danger" onClick={onDelete}>Eliminar tarjeta</button>}
+  const [form,setForm]=useState({name:card?.name||"",color:card?.color||COLORS[0],closingDay:card?.closingDay||card?.closing_day||""});
+  return(
+    <div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}>
+      <div className="sheet-title">{card?"Editar tarjeta":"Nueva tarjeta"}<button onClick={onClose} style={{fontSize:20,color:"var(--muted)"}}>✕</button></div>
+      <div className="field"><label>Nombre</label><input type="text" placeholder="Ej: Visa, Naranja, Débito" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} autoFocus/></div>
+      <div className="field">
+        <label>Día de cierre</label>
+        <input type="number" min="1" max="31" placeholder="Ej: 15 (dejá vacío si no aplica)" value={form.closingDay} onChange={e=>setForm(f=>({...f,closingDay:e.target.value?Number(e.target.value):null}))}/>
+        <div style={{fontSize:11,color:"var(--muted)",marginTop:5,lineHeight:1.5}}>Si tu tarjeta cierra el 15, los gastos del 16 en adelante van al próximo período.</div>
       </div>
-    </div>
+      <div className="field"><label>Color</label>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:4}}>
+          {COLORS.map(c=><button key={c} onClick={()=>setForm(f=>({...f,color:c}))} style={{width:28,height:28,borderRadius:"50%",background:c,border:form.color===c?"3px solid white":"3px solid transparent"}}/>)}
+        </div>
+      </div>
+      <button className="btn btn-primary" onClick={()=>{if(form.name)onSave(form)}}>{card?"Guardar":"Agregar tarjeta"}</button>
+      {onDelete&&<button className="btn btn-danger" onClick={onDelete}>Eliminar tarjeta</button>}
+    </div></div>
   );
 }
 
-// ── SettingsModal ─────────────────────────────────────────────────────────────
 function SettingsModal({settings,onSave,onClose}) {
   const [form,setForm]=useState({budget:settings.budget||"",income:settings.income||""});
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="sheet" onClick={e=>e.stopPropagation()}>
-        <div className="sheet-title">Ajustes
-          <button onClick={onClose} style={{fontSize:20,color:"var(--muted)"}}>✕</button></div>
-        <div className="field"><label>Ingreso mensual ($)</label>
-          <input type="number" placeholder="0" value={form.income} onChange={e=>setForm(f=>({...f,income:Number(e.target.value)}))} /></div>
-        <div className="field"><label>Presupuesto mensual ($)</label>
-          <input type="number" placeholder="0 = sin límite" value={form.budget} onChange={e=>setForm(f=>({...f,budget:Number(e.target.value)}))} /></div>
-        <button className="btn btn-primary" onClick={()=>onSave(form)}>Guardar</button>
-      </div>
-    </div>
+  return(
+    <div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}>
+      <div className="sheet-title">Ajustes<button onClick={onClose} style={{fontSize:20,color:"var(--muted)"}}>✕</button></div>
+      <div className="field"><label>Ingreso mensual ($)</label><input type="number" placeholder="0" value={form.income} onChange={e=>setForm(f=>({...f,income:Number(e.target.value)}))}/></div>
+      <div className="field"><label>Presupuesto mensual ($)</label><input type="number" placeholder="0 = sin límite" value={form.budget} onChange={e=>setForm(f=>({...f,budget:Number(e.target.value)}))}/></div>
+      <button className="btn btn-primary" onClick={()=>onSave(form)}>Guardar</button>
+    </div></div>
   );
 }
 
-// ── BackupModal ───────────────────────────────────────────────────────────────
-function BackupModal({onExport,onImport,onClose}) {
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="sheet" onClick={e=>e.stopPropagation()}>
-        <div className="sheet-title">Backup de datos
-          <button onClick={onClose} style={{fontSize:20,color:"var(--muted)"}}>✕</button></div>
-        <p style={{fontSize:14,color:"var(--muted)",marginBottom:20,lineHeight:1.6}}>
-          Exportá tus datos como JSON. Si necesitás restaurarlos, importá el archivo.
-        </p>
-        <button className="btn btn-primary" onClick={onExport} style={{marginBottom:10}}>⬇️ Exportar datos</button>
-        <label className="btn" style={{background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:"var(--radius-sm)",padding:13,display:"block",textAlign:"center",cursor:"pointer",fontWeight:600,fontSize:15}}>
-          ⬆️ Importar datos
-          <input type="file" accept=".json" style={{display:"none"}} onChange={onImport}/>
-        </label>
-      </div>
-    </div>
-  );
-}
-
-// ── AnalisisTab ───────────────────────────────────────────────────────────────
 function AnalisisTab({cards}) {
   const [selectedCard,setSelectedCard]=useState(cards[0]?.id||"");
   const [closingDate,setClosingDate]=useState("");
@@ -734,152 +634,74 @@ function AnalisisTab({cards}) {
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState("");
 
-  function handlePdf(e) {
-    const f=e.target.files[0]; if(!f) return;
-    setPdfFile(f); setPdfName(f.name); setAnalysis(null); setError("");
-  }
-
   async function analyze() {
-    if(!pdfFile){setError("Primero subí el PDF del resumen.");return;}
-    setLoading(true); setError(""); setAnalysis(null);
+    if(!pdfFile){setError("Primero subí el PDF.");return;}
+    setLoading(true);setError("");setAnalysis(null);
     try {
-      const cardName=cards.find(c=>c.id===selectedCard)?.name||"tarjeta de crédito";
-      const base64=await new Promise((res,rej)=>{
-        const r=new FileReader();
-        r.onload=()=>res(r.result.split(",")[1]);
-        r.onerror=()=>rej(new Error("No se pudo leer"));
-        r.readAsDataURL(pdfFile);
-      });
-      const resp=await fetch("https://api.anthropic.com/v1/messages",{
-        method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({
-          model:"claude-sonnet-4-20250514",max_tokens:1000,
-          system:`Sos un asistente financiero personal que analiza resúmenes de tarjetas de crédito argentinas. Respondé SOLO con JSON válido sin texto extra ni backticks:
-{"periodo":"string","total":number,"categorias":[{"nombre":"string","icono":"emoji","total":number,"porcentaje":number,"items":["desc monto"]}],"insights":["string"],"recomendaciones":["string"],"alertas":["string"]}
-Agrupa gastos inteligentemente. Insights concretos. Recomendaciones accionables. Alertas solo si hay algo llamativo.`,
-          messages:[{role:"user",content:[
-            {type:"document",source:{type:"base64",media_type:"application/pdf",data:base64}},
-            {type:"text",text:`Resumen de mi ${cardName}${closingDate?` cierre ${closingDate}`:""}.`}
-          ]}]
-        })
-      });
+      const cardName=cards.find(c=>c.id===selectedCard)?.name||"tarjeta";
+      const base64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(pdfFile);});
+      const resp=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,
+          system:`Analizá resúmenes de tarjetas argentinas. Respondé SOLO JSON sin texto extra:
+{"periodo":"string","total":number,"categorias":[{"nombre":"string","icono":"emoji","total":number,"porcentaje":number,"items":["string"]}],"insights":["string"],"recomendaciones":["string"],"alertas":["string"]}`,
+          messages:[{role:"user",content:[{type:"document",source:{type:"base64",media_type:"application/pdf",data:base64}},{type:"text",text:`Resumen de mi ${cardName}${closingDate?` cierre ${closingDate}`:""}.`}]}]})});
       const data=await resp.json();
       const text=data.content?.map(b=>b.text||"").join("").trim();
       setAnalysis(JSON.parse(text.replace(/```json|```/g,"").trim()));
-    } catch(e) {
-      setError("No se pudo analizar el PDF. Verificá que sea un resumen de tarjeta válido.");
-    } finally { setLoading(false); }
+    } catch(e){setError("No se pudo analizar el PDF.");}
+    finally{setLoading(false);}
   }
 
   const maxCat=analysis?Math.max(...analysis.categorias.map(c=>c.total)):1;
-
-  return (
+  return(
     <div style={{display:"flex",flexDirection:"column",gap:16}}>
-      <div style={{background:"var(--surface)",borderRadius:"var(--radius-sm)",padding:"12px 14px",fontSize:13,color:"var(--muted)",lineHeight:1.6}}>
-        Subí el PDF del resumen y Claude analiza en qué gastás y dónde podés ahorrar.
-      </div>
+      <div style={{background:"var(--surface)",borderRadius:"var(--radius-sm)",padding:"12px 14px",fontSize:13,color:"var(--muted)",lineHeight:1.6}}>Subí el PDF del resumen y Claude analiza en qué gastás y dónde podés ahorrar.</div>
       <div className="card">
-        <div className="field"><label>Tarjeta</label>
-          <select value={selectedCard} onChange={e=>setSelectedCard(e.target.value)}
-            style={{width:"100%",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:"var(--radius-sm)",padding:"11px 13px",fontSize:15}}>
-            {cards.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-        <div className="field"><label>Fecha de cierre (opcional)</label>
-          <input type="date" value={closingDate} onChange={e=>setClosingDate(e.target.value)}
-            style={{width:"100%",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:"var(--radius-sm)",padding:"11px 13px",fontSize:15}}/></div>
+        <div className="field"><label>Tarjeta</label><select value={selectedCard} onChange={e=>setSelectedCard(e.target.value)} style={{width:"100%",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:"var(--radius-sm)",padding:"11px 13px",fontSize:15}}>{cards.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+        <div className="field"><label>Fecha de cierre (opcional)</label><input type="date" value={closingDate} onChange={e=>setClosingDate(e.target.value)} style={{width:"100%",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:"var(--radius-sm)",padding:"11px 13px",fontSize:15}}/></div>
         <div className="field"><label>PDF del resumen</label>
           <label style={{display:"flex",alignItems:"center",gap:12,background:"var(--surface2)",border:`1px dashed ${pdfFile?"var(--accent)":"var(--border)"}`,borderRadius:"var(--radius-sm)",padding:"14px 16px",cursor:"pointer"}}>
             <span style={{fontSize:24}}>{pdfFile?"📄":"⬆️"}</span>
-            <div><div style={{fontWeight:500,fontSize:14}}>{pdfName||"Elegir archivo PDF"}</div>
-              <div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>{pdfFile?"Toca para cambiar":"Resumen en PDF"}</div></div>
-            <input type="file" accept="application/pdf" style={{display:"none"}} onChange={handlePdf}/>
-          </label></div>
-        {error&&<div style={{background:"rgba(239,68,68,.1)",color:"var(--danger)",borderRadius:"var(--radius-sm)",padding:"10px 14px",fontSize:13,marginBottom:12}}>{error}</div>}
-        <button className="btn btn-primary" onClick={analyze} disabled={loading||!pdfFile} style={{opacity:(!pdfFile||loading)?.5:1}}>
-          {loading?"Analizando...":"🤖 Analizar resumen"}</button>
-      </div>
-
-      {loading&&(
-        <div className="card" style={{display:"flex",flexDirection:"column",gap:12,alignItems:"center",padding:"32px 20px"}}>
-          <div style={{fontSize:36}}>🤖</div>
-          <div style={{fontWeight:500}}>Leyendo tu resumen...</div>
-          <div style={{fontSize:13,color:"var(--muted)",textAlign:"center",lineHeight:1.6}}>
-            Analizando todos tus gastos y buscando oportunidades de ahorro</div>
-          <div style={{width:"100%",height:4,background:"var(--border)",borderRadius:99,overflow:"hidden",marginTop:8}}>
-            <div style={{height:"100%",background:"var(--accent)",borderRadius:99,animation:"ldbar 1.5s ease-in-out infinite"}}/>
-          </div>
-          <style>{`@keyframes ldbar{0%{width:0%}50%{width:70%}100%{width:100%}}`}</style>
+            <div><div style={{fontWeight:500,fontSize:14}}>{pdfName||"Elegir archivo PDF"}</div><div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>{pdfFile?"Toca para cambiar":"Resumen en PDF"}</div></div>
+            <input type="file" accept="application/pdf" style={{display:"none"}} onChange={e=>{const f=e.target.files[0];if(f){setPdfFile(f);setPdfName(f.name);setAnalysis(null);setError("");}}}/>
+          </label>
         </div>
-      )}
-
+        {error&&<div style={{background:"rgba(239,68,68,.1)",color:"var(--danger)",borderRadius:"var(--radius-sm)",padding:"10px 14px",fontSize:13,marginBottom:12}}>{error}</div>}
+        <button className="btn btn-primary" onClick={analyze} disabled={loading||!pdfFile} style={{opacity:(!pdfFile||loading)?.5:1}}>{loading?"Analizando...":"🤖 Analizar resumen"}</button>
+      </div>
+      {loading&&<div className="card" style={{display:"flex",flexDirection:"column",gap:12,alignItems:"center",padding:"32px 20px"}}>
+        <div style={{fontSize:36}}>🤖</div><div style={{fontWeight:500}}>Leyendo tu resumen...</div>
+        <div style={{width:"100%",height:4,background:"var(--border)",borderRadius:99,overflow:"hidden",marginTop:8}}>
+          <div style={{height:"100%",background:"var(--accent)",borderRadius:99,animation:"ldbar 1.5s ease-in-out infinite"}}/>
+        </div>
+        <style>{`@keyframes ldbar{0%{width:0%}50%{width:70%}100%{width:100%}}`}</style>
+      </div>}
       {analysis&&!loading&&(
         <>
           <div className="card" style={{borderLeft:"3px solid var(--accent)"}}>
-            <div style={{fontSize:12,color:"var(--muted)",marginBottom:4,textTransform:"uppercase",letterSpacing:".5px"}}>
-              {analysis.periodo}</div>
-            <div style={{fontSize:28,fontWeight:700,letterSpacing:"-1px"}}>
-              {new Intl.NumberFormat("es-AR",{style:"currency",currency:"ARS",maximumFractionDigits:0}).format(analysis.total)}</div>
-            <div style={{fontSize:13,color:"var(--muted)",marginTop:4}}>
-              total · {analysis.categorias.length} categorías</div>
+            <div style={{fontSize:12,color:"var(--muted)",marginBottom:4,textTransform:"uppercase",letterSpacing:".5px"}}>{analysis.periodo}</div>
+            <div style={{fontSize:28,fontWeight:700,letterSpacing:"-1px"}}>{new Intl.NumberFormat("es-AR",{style:"currency",currency:"ARS",maximumFractionDigits:0}).format(analysis.total)}</div>
+            <div style={{fontSize:13,color:"var(--muted)",marginTop:4}}>total · {analysis.categorias.length} categorías</div>
           </div>
-
           <div className="card">
             <div className="section-title" style={{marginBottom:14}}>Breakdown</div>
             {analysis.categorias.sort((a,b)=>b.total-a.total).map((cat,i)=>(
               <div key={i} style={{marginBottom:16}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                  <div style={{display:"flex",alignItems:"center",gap:8}}>
-                    <span style={{fontSize:20}}>{cat.icono}</span>
-                    <span style={{fontWeight:500,fontSize:14}}>{cat.nombre}</span>
-                    <span style={{fontSize:11,padding:"2px 7px",background:"var(--surface2)",borderRadius:99,color:"var(--muted)"}}>{cat.porcentaje}%</span>
-                  </div>
-                  <span style={{fontWeight:600,fontSize:14}}>
-                    {new Intl.NumberFormat("es-AR",{style:"currency",currency:"ARS",maximumFractionDigits:0}).format(cat.total)}</span>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:20}}>{cat.icono}</span><span style={{fontWeight:500,fontSize:14}}>{cat.nombre}</span><span style={{fontSize:11,padding:"2px 7px",background:"var(--surface2)",borderRadius:99,color:"var(--muted)"}}>{cat.porcentaje}%</span></div>
+                  <span style={{fontWeight:600,fontSize:14}}>{new Intl.NumberFormat("es-AR",{style:"currency",currency:"ARS",maximumFractionDigits:0}).format(cat.total)}</span>
                 </div>
                 <div style={{height:6,background:"var(--border)",borderRadius:99,overflow:"hidden",marginBottom:cat.items?.length?8:0}}>
                   <div style={{height:"100%",background:"var(--accent)",borderRadius:99,width:`${(cat.total/maxCat*100).toFixed(0)}%`}}/>
                 </div>
-                {cat.items?.slice(0,4).map((item,j)=>(
-                  <div key={j} style={{fontSize:12,color:"var(--muted)",paddingLeft:28}}>· {item}</div>
-                ))}
-                {cat.items?.length>4&&<div style={{fontSize:12,color:"var(--muted)",paddingLeft:28}}>· y {cat.items.length-4} más...</div>}
+                {cat.items?.slice(0,4).map((item,j)=><div key={j} style={{fontSize:12,color:"var(--muted)",paddingLeft:28}}>· {item}</div>)}
               </div>
             ))}
           </div>
-
-          {analysis.alertas?.length>0&&(
-            <div style={{background:"rgba(245,158,11,.08)",border:"1px solid rgba(245,158,11,.25)",borderRadius:"var(--radius-sm)",padding:"14px 16px"}}>
-              <div style={{fontWeight:600,fontSize:13,color:"var(--warn)",marginBottom:10}}>⚠️ Alertas</div>
-              {analysis.alertas.map((a,i)=><div key={i} style={{fontSize:13,lineHeight:1.6,marginBottom:6}}>{a}</div>)}
-            </div>
-          )}
-
-          {analysis.insights?.length>0&&(
-            <div className="card">
-              <div className="section-title" style={{marginBottom:12}}>📈 Lo que veo</div>
-              {analysis.insights.map((ins,i)=>(
-                <div key={i} style={{display:"flex",gap:10,marginBottom:12}}>
-                  <div style={{width:6,height:6,borderRadius:"50%",background:"var(--accent)",marginTop:7,flexShrink:0}}/>
-                  <div style={{fontSize:14,lineHeight:1.6}}>{ins}</div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {analysis.recomendaciones?.length>0&&(
-            <div className="card" style={{borderLeft:"3px solid var(--success)"}}>
-              <div className="section-title" style={{marginBottom:12,color:"var(--success)"}}>💡 Dónde podés ahorrar</div>
-              {analysis.recomendaciones.map((rec,i)=>(
-                <div key={i} style={{display:"flex",gap:12,padding:"10px 0",borderBottom:i<analysis.recomendaciones.length-1?"1px solid var(--border)":"none"}}>
-                  <span style={{fontSize:18,flexShrink:0}}>✂️</span>
-                  <div style={{fontSize:14,lineHeight:1.6}}>{rec}</div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <button className="btn" style={{background:"var(--surface2)",border:"1px solid var(--border)"}}
-            onClick={()=>{setAnalysis(null);setPdfFile(null);setPdfName("");}}>
-            Analizar otro resumen</button>
+          {analysis.alertas?.length>0&&<div style={{background:"rgba(245,158,11,.08)",border:"1px solid rgba(245,158,11,.25)",borderRadius:"var(--radius-sm)",padding:"14px 16px"}}><div style={{fontWeight:600,fontSize:13,color:"var(--warn)",marginBottom:10}}>⚠️ Alertas</div>{analysis.alertas.map((a,i)=><div key={i} style={{fontSize:13,lineHeight:1.6,marginBottom:6}}>{a}</div>)}</div>}
+          {analysis.insights?.length>0&&<div className="card"><div className="section-title" style={{marginBottom:12}}>📈 Lo que veo</div>{analysis.insights.map((ins,i)=><div key={i} style={{display:"flex",gap:10,marginBottom:12}}><div style={{width:6,height:6,borderRadius:"50%",background:"var(--accent)",marginTop:7,flexShrink:0}}/><div style={{fontSize:14,lineHeight:1.6}}>{ins}</div></div>)}</div>}
+          {analysis.recomendaciones?.length>0&&<div className="card" style={{borderLeft:"3px solid var(--success)"}}><div className="section-title" style={{marginBottom:12,color:"var(--success)"}}>💡 Dónde podés ahorrar</div>{analysis.recomendaciones.map((rec,i)=><div key={i} style={{display:"flex",gap:12,padding:"10px 0",borderBottom:i<analysis.recomendaciones.length-1?"1px solid var(--border)":"none"}}><span style={{fontSize:18,flexShrink:0}}>✂️</span><div style={{fontSize:14,lineHeight:1.6}}>{rec}</div></div>)}</div>}
+          <button className="btn" style={{background:"var(--surface2)",border:"1px solid var(--border)"}} onClick={()=>{setAnalysis(null);setPdfFile(null);setPdfName("");}}>Analizar otro resumen</button>
         </>
       )}
     </div>
