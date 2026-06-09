@@ -110,10 +110,13 @@ export default function App() {
         ]);
         if (Array.isArray(exp))   setExpenses(exp.map(e => ({ ...e, isFixed: e.is_fixed, fixedRef: e.fixed_ref })));
         if (Array.isArray(fixed)) setFixedExpenses(fixed);
-        if (Array.isArray(cds) && cds.length > 0) setCards(cds.map(c => ({ ...c, closingDay: c.closing_day })));
-        else {
-          // insert default cards if none exist
+        if (Array.isArray(cds) && cds.length > 0) {
+          const missing = DEFAULT_CARDS.filter(d => !cds.some(c => c.id === d.id));
+          if (missing.length > 0) await sb("cards", "POST", missing.map(c => ({ ...c, closing_day: c.closing_day })));
+          setCards([...cds, ...missing].map(c => ({ ...c, closingDay: c.closing_day })));
+        } else {
           await sb("cards", "POST", DEFAULT_CARDS.map(c => ({ ...c, closing_day: c.closing_day })));
+          setCards(DEFAULT_CARDS.map(c => ({ ...c, closingDay: c.closing_day })));
         }
         if (Array.isArray(stg) && stg.length > 0) setSettings(stg[0]);
         else await sb("settings", "POST", [{ id:"default", budget:0, income:0 }]);
