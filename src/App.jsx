@@ -278,10 +278,12 @@ export default function App() {
           --text:#f1f1f5;--muted:#8888a0;--danger:#ef4444;--success:#10b981;--warn:#f59e0b;
           --radius:14px;--radius-sm:8px;
         }
-        body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:15px;line-height:1.5;min-height:100vh}
+        html,body{height:100%;height:100dvh;overflow:hidden;overscroll-behavior:none}
+        body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:15px;line-height:1.5}
         button{cursor:pointer;border:none;background:none;color:inherit;font:inherit}
         input,select,textarea{font:inherit;color:inherit;background:none;border:none;outline:none}
-        .app{display:flex;flex-direction:column;min-height:100vh;max-width:480px;margin:0 auto}
+        .app{display:flex;flex-direction:column;height:100dvh;max-width:480px;margin:0 auto;overflow:hidden}
+        .content{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
         .topbar{position:sticky;top:0;z-index:10;background:var(--bg);padding:14px 20px 10px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}
         .topbar-title{font-size:18px;font-weight:600;letter-spacing:-.3px;display:flex;align-items:center;gap:8px}
         .sync-dot{width:7px;height:7px;border-radius:50%;background:var(--success)}
@@ -290,7 +292,7 @@ export default function App() {
         .topbar-actions{display:flex;gap:8px}
         .icon-btn{width:36px;height:36px;border-radius:50%;background:var(--surface);display:flex;align-items:center;justify-content:center;font-size:16px;transition:background .15s}
         .icon-btn:hover{background:var(--surface2)}
-        .content{flex:1;padding:20px;padding-bottom:100px;display:flex;flex-direction:column;gap:16px}
+        .content{padding:20px;padding-bottom:100px;display:flex;flex-direction:column;gap:16px}
         .nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;background:var(--surface);border-top:1px solid var(--border);display:flex;padding:8px 0 calc(8px + env(safe-area-inset-bottom))}
         .nav-item{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 0;font-size:11px;color:var(--muted);transition:color .15s}
         .nav-item.active{color:var(--accent2)}
@@ -578,7 +580,7 @@ function ExpenseModal({expense,categories,cards,onSave,onDelete,onClose}) {
   return(
     <div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}>
       <div className="sheet-title">{expense?"Editar gasto":"Nuevo gasto"}<button onClick={onClose} style={{fontSize:20,color:"var(--muted)"}}>✕</button></div>
-      <div className="field"><label>Monto ($)</label><input type="text" inputMode="decimal" placeholder="0" value={displayAmount} onChange={e=>handleAmount(e.target.value)} autoFocus style={{fontSize:22,fontWeight:700,letterSpacing:"-.5px"}}/></div>
+      <div className="field"><label>Monto ($)</label><input type="text" inputMode="decimal" placeholder="0" value={displayAmount} onChange={e=>handleAmount(e.target.value)} style={{fontSize:22,fontWeight:700,letterSpacing:"-.5px"}}/></div>
       <div className="field"><label>Descripción</label><input type="text" placeholder="Ej: Almuerzo" value={form.description} onChange={e=>set("description",e.target.value)}/></div>
       <div className="field"><label>Categoría</label><CategoryPicker categories={categories} value={form.category} onChange={v=>set("category",v)}/></div>
       <div className="field"><label>Medio de pago</label><CardChips cards={cards} value={form.card} onChange={v=>set("card",v)}/></div>
@@ -597,7 +599,7 @@ function FixedModal({expense,categories,cards,onSave,onDelete,onClose}) {
   return(
     <div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}>
       <div className="sheet-title">{expense?"Editar gasto fijo":"Nuevo gasto fijo"}<button onClick={onClose} style={{fontSize:20,color:"var(--muted)"}}>✕</button></div>
-      <div className="field"><label>Monto ($)</label><input type="text" inputMode="decimal" placeholder="0" value={displayAmount} onChange={e=>handleAmount(e.target.value)} autoFocus style={{fontSize:22,fontWeight:700,letterSpacing:"-.5px"}}/></div>
+      <div className="field"><label>Monto ($)</label><input type="text" inputMode="decimal" placeholder="0" value={displayAmount} onChange={e=>handleAmount(e.target.value)} style={{fontSize:22,fontWeight:700,letterSpacing:"-.5px"}}/></div>
       <div className="field"><label>Descripción</label><input type="text" placeholder="Ej: Expensas" value={form.description} onChange={e=>set("description",e.target.value)}/></div>
       <div className="field"><label>Categoría</label><CategoryPicker categories={categories} value={form.category} onChange={v=>set("category",v)}/></div>
       <div className="field"><label>Medio de pago</label><CardChips cards={cards} value={form.card} onChange={v=>set("card",v)}/></div>
@@ -647,7 +649,7 @@ function CardModal({card,onSave,onDelete,onClose}) {
   return(
     <div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}>
       <div className="sheet-title">{card?"Editar tarjeta":"Nueva tarjeta"}<button onClick={onClose} style={{fontSize:20,color:"var(--muted)"}}>✕</button></div>
-      <div className="field"><label>Nombre</label><input type="text" placeholder="Ej: Visa, Naranja, Débito" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} autoFocus/></div>
+      <div className="field"><label>Nombre</label><input type="text" placeholder="Ej: Visa, Naranja, Débito" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))}/></div>
       <div className="field">
         <label>Día de cierre</label>
         <input type="number" min="1" max="31" placeholder="Ej: 15 (dejá vacío si no aplica)" value={form.closingDay} onChange={e=>setForm(f=>({...f,closingDay:e.target.value?Number(e.target.value):null}))}/>
